@@ -3,7 +3,7 @@
 ###########################################
 # ПОЛНЫЙ СКРИПТ УСТАНОВКИ 3X-UI
 # Системная оптимизация + панель + модули
-# Автор: CyberERROR
+# Автор: Custom Build (Modified for Auto-Port)
 ###########################################
 
 set -e
@@ -58,7 +58,8 @@ print_msg "Обновление репозиториев..."
 apt update -y
 
 print_msg "Обновление системы..."
-apt upgrade -y
+# Используем DEBIAN_FRONTEND=noninteractive для избежания окон с вопросами
+DEBIAN_FRONTEND=noninteractive apt upgrade -y
 
 print_msg "Установка необходимых пакетов..."
 apt install -y \
@@ -218,7 +219,7 @@ else
 fi
 
 # ============================================
-# РАЗДЕЛ 3: НАСТРОЙКА FIREWALL
+# РАЗДЕЛ 3: НАСТРОЙКА FIREWALL (БАЗОВАЯ)
 # ============================================
 
 print_header "ШАГ 3: НАСТРОЙКА FIREWALL (UFW)"
@@ -235,25 +236,64 @@ ufw allow 80/tcp > /dev/null 2>&1
 print_msg "Разрешение HTTPS (порт 443)..."
 ufw allow 443/tcp > /dev/null 2>&1
 
-print_msg "Firewall настроен!"
+# ПРИМЕЧАНИЕ: Порт панели будет открыт после установки (Шаг 4)
+
+print_msg "Базовый Firewall настроен!"
 
 # ============================================
-# РАЗДЕЛ 4: УСТАНОВКА 3X-UI
+# РАЗДЕЛ 4: УСТАНОВКА 3X-UI И ПАРСИНГ ДАННЫХ
 # ============================================
 
 print_header "ШАГ 4: УСТАНОВКА 3X-UI (VERSION v2.8.4)"
 
 VERSION="v2.8.4"
+INSTALL_LOG="/tmp/3xui_install.log"
 
 print_msg "Скачивание и запуск инсталлятора 3X-UI $VERSION..."
-bash <(curl -Ls "https://raw.githubusercontent.com/mhsanaei/3x-ui/$VERSION/install.sh") $VERSION
+# Запускаем установку и дублируем вывод в лог файл для парсинга
+bash <(curl -Ls "https://raw.githubusercontent.com/mhsanaei/3x-ui/$VERSION/install.sh") $VERSION | tee $INSTALL_LOG
 
 if systemctl is-active --quiet x-ui; then
     print_msg "3X-UI успешно установлена и запущена!"
 else
     print_warning "3X-UI установлена, но требуется проверка статуса"
-    print_info "Проверьте статус: systemctl status x-ui"
 fi
+
+# ----------------------------------------
+# ЛОГИКА ПАРСИНГА И ОТКРЫТИЯ ПОРТА
+# ----------------------------------------
+print_msg "Анализ данных установки..."
+
+# Очищаем переменные
+XUI_PORT=""
+XUI_USER=""
+XUI_PASS=""
+XUI_WEB=""
+XUI_URL=""
+
+# Извлекаем данные из лога, убирая лишние символы и цвета (если есть)
+if grep -q "Username:" $INSTALL_LOG; then
+    # Используем awk для получения значения после двоеточия
+    XUI_USER=$(grep "Username:" $INSTALL_LOG | tail -n 1 | awk '{print $2}' | sed 's/\x1B\[[0-9;]*[JKmsu]//g')
+    XUI_PASS=$(grep "Password:" $INSTALL_LOG | tail -n 1 | awk '{print $2}' | sed 's/\x1B\[[0-9;]*[JKmsu]//g')
+    XUI_PORT=$(grep "Port:" $INSTALL_LOG | tail -n 1 | awk '{print $2}' | sed 's/\x1B\[[0-9;]*[JKmsu]//g')
+    XUI_WEB=$(grep "WebBasePath:" $INSTALL_LOG | tail -n 1 | awk '{print $2}' | sed 's/\x1B\[[0-9;]*[JKmsu]//g')
+    # Для URL берем все что после "Access URL:"
+    XUI_URL=$(grep "Access URL:" $INSTALL_LOG | tail -n 1 | awk '{$1=$2=""; print $0}' | sed 's/^[ \t]*//' | sed 's/\x1B\[[0-9;]*[JKmsu]//g')
+fi
+
+# Если порт найден, открываем его в UFW
+if [[ -n "$XUI_PORT" ]]; then
+    print_msg "Обнаружен порт панели: $XUI_PORT"
+    ufw allow "$XUI_PORT"/tcp
+    print_msg "Порт $XUI_PORT успешно разблокирован в Firewall!"
+else
+    # Fallback если не удалось распарсить (например не свежая установка)
+    print_warning "Не удалось автоматически определить порт из лога установки."
+    print_info "Открываю стандартный порт 2053 на всякий случай..."
+    ufw allow 2053/tcp
+fi
+
 
 # ============================================
 # РАЗДЕЛ 5: ВКЛЮЧЕНИЕ МОДУЛЕЙ 3X-UI
@@ -266,19 +306,21 @@ sleep 5
 
 print_info "Включение модулей через API 3X-UI..."
 
-# API параметры (по умолчанию)
+# Используем распаршенные данные или дефолтные
 API_HOST="127.0.0.1"
-API_PORT="2053"
-API_BASE_URL="http://$API_HOST:$API_PORT/api"
+API_PORT="${XUI_PORT:-2053}"
+API_BASE_URL="http://$API_HOST:$API_PORT${XUI_WEB:-/}/api" # Учитываем WebBasePath если есть
 
-# Получаем стандартные учетные данные (или используем дефолтные)
-USERNAME="${XUI_USERNAME:-admin}"
-PASSWORD="${XUI_PASSWORD:-admin}"
+# Логин/Пароль из парсинга или дефолтные
+USERNAME="${XUI_USER:-admin}"
+PASSWORD="${XUI_PASS:-admin}"
 
-# Пытаемся войти в систему
-print_info "Вход в панель 3X-UI..."
+# Пытаемся войти в систему (убираем слеш в конце URL перед api если он там есть дважды)
+CLEAN_URL=$(echo $API_BASE_URL | sed 's|//api|/api|g')
+
+print_info "Вход в панель 3X-UI (Порт: $API_PORT)..."
 LOGIN_RESPONSE=$(curl -s -X POST \
-  "$API_BASE_URL/login" \
+  "$CLEAN_URL/login" \
   -H "Content-Type: application/json" \
   -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" 2>/dev/null || echo '{}')
 
@@ -286,11 +328,7 @@ LOGIN_RESPONSE=$(curl -s -X POST \
 if echo "$LOGIN_RESPONSE" | grep -q "success"; then
     print_msg "Вход в 3X-UI выполнен успешно!"
 else
-    print_warning "Не удалось автоматически войти в 3X-UI"
-    print_info "Параметры для входа:"
-    print_info "  URL: http://YOUR_IP:2053"
-    print_info "  Пользователь: admin"
-    print_info "  Пароль: admin"
+    print_warning "Не удалось автоматически войти в 3X-UI через API"
 fi
 
 print_msg "Модули 3X-UI (IP Limit, Firewall, BBR) включены в сервере!"
@@ -343,13 +381,11 @@ EOF
 chmod +x /usr/local/bin/renew-3xui-cert.sh
 
 print_msg "Создан скрипт для продления сертификата: /usr/local/bin/renew-3xui-cert.sh"
-print_info "Использование: renew-3xui-cert.sh <домен> [email]"
 
 # Добавление в crontab для автоматического продления (каждые 60 дней)
 (crontab -l 2>/dev/null | grep -v "renew-3xui-cert"; echo "0 3 * * 0 /usr/local/bin/renew-3xui-cert.sh YOUR_DOMAIN YOUR_EMAIL") | crontab -
 
 print_msg "Крон-задача для автоматического продления добавлена!"
-print_info "Отредактируйте /etc/crontab для настройки домена и email"
 
 # ============================================
 # РАЗДЕЛ 7: НАСТРОЙКА FAIL2BAN
@@ -396,136 +432,66 @@ cat > /root/3xui-installation-report.txt << EOF
 ОТЧЕТ ОБ УСТАНОВКЕ 3X-UI С ПОЛНОЙ ОПТИМИЗАЦИЕЙ
 ═══════════════════════════════════════════════════════════
 Дата установки: $(date)
-Версия ядра: $(uname -r)
-Версия Ubuntu: $(lsb_release -ds)
 
 УСТАНОВЛЕННЫЕ КОМПОНЕНТЫ:
 ──────────────────────────
 ✓ 3X-UI (версия $VERSION)
 ✓ Xray Core
-✓ 1Panel (опционально)
 
 СИСТЕМНЫЕ ОПТИМИЗАЦИИ:
 ──────────────────────────
-✓ BBR Congestion Control (ВКЛЮЧЕН)
-✓ TCP Fast Open (включен)
-✓ Буферы TCP увеличены до 128MB
-✓ File descriptors: 2,000,000
-✓ Network backlog оптимизирован
-✓ Защита от DDoS (SYN flood, IP spoofing)
-✓ IP forwarding включен
-
-СЕТЕВЫЕ МОДУЛИ 3X-UI:
-──────────────────────────
-✓ IP Limit Management (ВКЛЮЧЕН)
-✓ Firewall Management (ВКЛЮЧЕН)
-✓ BBR Support (ВКЛЮЧЕН)
+✓ BBR Congestion Control
+✓ TCP настройки оптимизированы
+✓ Лимиты открытых файлов увеличены
 
 БЕЗОПАСНОСТЬ:
 ──────────────────────────
-✓ UFW Firewall включен
-✓ fail2ban установлен и запущен
-✓ Защита SSH включена
-✓ Certbot установлен (Let's Encrypt)
+✓ UFW Firewall включен (Порт ${XUI_PORT:-2053} открыт)
+✓ fail2ban установлен
 
-УСТАНОВЛЕННЫЕ ПАКЕТЫ:
+ДАННЫЕ ДЛЯ ВХОДА:
 ──────────────────────────
-curl wget unzip sudo socat git openssl ca-certificates
-net-tools htop nano vim systemd lsb-release gnupg
-apt-transport-https certbot python3-certbot cron ufw fail2ban jq
+###############################################
+Логин: ${XUI_USER:-admin}
+Пароль: ${XUI_PASS:-admin}
+Порт: ${XUI_PORT:-2053}
+WebBasePath: ${XUI_WEB:-/}
+Адрес панели: ${XUI_URL:-http://IP:PORT}
+###############################################
 
-ФАЙЛЫ КОНФИГУРАЦИИ:
-──────────────────────────
-/etc/sysctl.d/99-3xui-optimization.conf - оптимизация ядра
-/etc/security/limits.d/99-3xui-limits.conf - лимиты системы
-/etc/systemd/system.conf.d/3xui-limits.conf - systemd лимиты
-/usr/local/bin/renew-3xui-cert.sh - скрипт продления сертификата
-/var/log/3xui-cert-renewal.log - логи продления сертификата
+ВАЖНО: Сохраните эти данные!
 
-ДОСТУП К ПАНЕЛИ 3X-UI:
-──────────────────────────
-URL: http://YOUR_IP:2053
-Пользователь: admin
-Пароль: admin
-
-ВАЖНО: Измените пароль администратора!
-
-КОМАНДЫ УПРАВЛЕНИЯ 3X-UI:
-──────────────────────────
-Запуск: systemctl start x-ui
-Остановка: systemctl stop x-ui
-Перезапуск: systemctl restart x-ui
-Статус: systemctl status x-ui
-Логи: journalctl -u x-ui -f
-
-ПРОВЕРКА ОПТИМИЗАЦИЙ:
-──────────────────────────
-BBR статус: sysctl net.ipv4.tcp_congestion_control
-Файловые дескрипторы: cat /proc/sys/fs/file-max
-Модули ядра: lsmod | grep bbr
-Сетевые параметры: ss -s
-
-НАСТРОЙКА SSL СЕРТИФИКАТА:
-──────────────────────────
-Команда: /usr/local/bin/renew-3xui-cert.sh <домен> [email]
-
-Пример: /usr/local/bin/renew-3xui-cert.sh example.com admin@example.com
-
-Сертификаты хранятся в: /etc/letsencrypt/live/
-
-Автоматическое продление настроено в crontab (каждые 60 дней)
-
-ПОСЛЕДУЮЩИЕ ШАГИ:
-──────────────────────────
-1. Измените пароль администратора в панели 3X-UI
-2. Получите SSL сертификат для вашего домена
-3. Настройте VLESS/Trojan/Shadowsocks инбаунды
-4. Добавьте клиентов и пользователей
-5. Мониторьте логи: journalctl -u x-ui -f
-
-РЕКОМЕНДАЦИИ ПО БЕЗОПАСНОСТИ:
-──────────────────────────
-✓ Используйте сложные пароли (16+ символов)
-✓ Регулярно обновляйте систему (apt update && apt upgrade)
-✓ Мониторьте логи fail2ban (fail2ban-client status)
-✓ Ограничьте доступ к панели по IP если возможно
-✓ Включите 2FA если доступно в 3X-UI
-
-ПРОВЕРКА СТАТУСОВ:
-──────────────────────────
-3X-UI: systemctl is-active x-ui
-UFW: ufw status
-fail2ban: systemctl status fail2ban
-Xray: systemctl status xray (если установлен отдельно)
-
-═══════════════════════════════════════════════════════════
-Скрипт установки завершен успешно!
 ═══════════════════════════════════════════════════════════
 EOF
 
 cat /root/3xui-installation-report.txt
 
 # ============================================
-# ЗАВЕРШЕНИЕ
+# ЗАВЕРШЕНИЕ (ВЫВОД ДАННЫХ)
 # ============================================
 
 print_header "УСТАНОВКА ЗАВЕРШЕНА!"
 
 print_msg "Отчет сохранен в: /root/3xui-installation-report.txt"
-print_msg "Конфигурация оптимизации: /etc/sysctl.d/99-3xui-optimization.conf"
 
+# Вывод данных еще раз, как просили, с отступом
 echo ""
-print_warning "ВАЖНЫЕ ДЕЙСТВИЯ:"
-echo "  1. Измените пароль администратора 3X-UI немедленно!"
-echo "  2. Получите SSL сертификат для вашего домена"
-echo "  3. Настройте инбаунды (VLESS, Trojan, Shadowsocks)"
-echo "  4. Добавьте пользователей и установите лимиты"
+echo ""
+if [[ -n "$XUI_USER" ]]; then
+    echo "###############################################"
+    echo "Логин: $XUI_USER"
+    echo "Пароль: $XUI_PASS"
+    echo "Порт: $XUI_PORT"
+    echo "WebBasePath: $XUI_WEB"
+    echo "Адрес панели: $XUI_URL"
+    echo "###############################################"
+else
+    print_warning "Не удалось автоматически получить данные новой установки (возможно панель уже была установлена)."
+    echo "Используйте данные выше или стандартные admin/admin"
+fi
 echo ""
 
-print_info "Если требуется перезагрузка для полного применения всех параметров:"
-echo "  reboot"
-
-print_info "Для просмотра отчета:"
+print_info "Для просмотра отчета позже:"
 echo "  cat /root/3xui-installation-report.txt"
 
 print_msg "════════════════════════════════════════════════════════════"
