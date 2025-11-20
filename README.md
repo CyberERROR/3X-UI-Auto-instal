@@ -189,30 +189,69 @@ Cron задача:
 
 ## 🚀 Быстрая установка одной командой
 
-### Способ 1: Через wget (рекомендуется)
-
+### Способ 1: Через curl
 ```bash
-sudo bash <(wget -qO- https://raw.githubusercontent.com/CyberERROR/3X-UI-Auto-instal/main/3x-ui-auto.sh)
+curl -Ls https://raw.githubusercontent.com/CyberERROR/3X-UI-Auto-instal/main/3x-ui-auto.sh | sudo bash
 ```
 
-### Способ 2: Через curl
-
+### Способ 2: Через wget
 ```bash
-sudo bash <(curl -Ls https://raw.githubusercontent.com/CyberERROR/3X-UI-Auto-instal/main/3x-ui-auto.sh)
+wget -qO- https://raw.githubusercontent.com/CyberERROR/3X-UI-Auto-instal/main/3x-ui-auto.sh | sudo bash
 ```
 
-### Способ 3: Локальная установка
-
+### Способ 3: Локальная установка (wget)
 ```bash
-# Скачиваешь скрипт
 wget https://raw.githubusercontent.com/CyberERROR/3X-UI-Auto-instal/main/3x-ui-auto.sh
-
-# Делаешь его исполняемым
 chmod +x 3x-ui-auto.sh
-
-# Запускаешь
 sudo bash 3x-ui-auto.sh
 ```
+
+### Способ 4: Локальная установка (curl)
+```bash
+curl -O https://raw.githubusercontent.com/CyberERROR/3X-UI-Auto-instal/main/3x-ui-auto.sh
+chmod +x 3x-ui-auto.sh
+sudo bash 3x-ui-auto.sh
+```
+
+---
+
+## 🔥 Настройка Firewall для панели 3X-UI
+
+### Разрешить порт панели управления
+```bash
+sudo ufw allow 2053/tcp
+```
+
+### Разрешить кастомные порты для инбаундов
+```bash
+# TCP порт
+sudo ufw allow 8443/tcp
+
+# UDP порт
+sudo ufw allow 8443/udp
+
+# Диапазон портов
+sudo ufw allow 10000:10100/tcp
+sudo ufw allow 10000:10100/udp
+```
+
+### Проверка статуса
+```bash
+sudo ufw status
+```
+
+### Удаление правил
+```bash
+sudo ufw status numbered
+sudo ufw delete 5
+```
+
+### Ограничение доступа по IP
+```bash
+sudo ufw allow from 123.123.123.123 to any port 2053 proto tcp
+```
+
+⚠️ **Важно:** Не блокируйте SSH порт (22), иначе потеряете доступ к серверу!
 
 ---
 
