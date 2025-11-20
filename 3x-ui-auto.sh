@@ -2,8 +2,8 @@
 
 ###########################################
 # ПОЛНЫЙ СКРИПТ УСТАНОВКИ 3X-UI
-# Системная оптимизация + панель + модули
-# Автор: Custom Build (Modified for Auto-Port)
+# Системная оптимизация + панель + модули + SWAP
+# Автор: Custom Build (Modified for Auto-Port & Swap)
 ###########################################
 
 set -e
@@ -46,7 +46,7 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-print_header "ПОЛНАЯ УСТАНОВКА 3X-UI С ОПТИМИЗАЦИЕЙ"
+print_header "ПОЛНАЯ УСТАНОВКА 3X-UI С ОПТИМИЗАЦИЕЙ И SWAP"
 
 # ============================================
 # РАЗДЕЛ 1: ОБНОВЛЕНИЕ И УСТАНОВКА ПАКЕТОВ
@@ -87,6 +87,45 @@ apt install -y \
     jq
 
 print_msg "Все необходимые пакеты установлены!"
+
+# ============================================
+# РАЗДЕЛ 1.5: НАСТРОЙКА SWAP (ФАЙЛ ПОДКАЧКИ)
+# ============================================
+
+print_header "ШАГ 1.5: СОЗДАНИЕ SWAP ФАЙЛА (1GB)"
+
+SWAP_FILE="/swapfile"
+SWAP_SIZE="1G"
+
+# Проверяем, существует ли уже swap
+if grep -q "$SWAP_FILE" /proc/swaps; then
+    print_warning "Swap файл уже подключен."
+else
+    print_msg "Создание файла подкачки размером $SWAP_SIZE..."
+    
+    # Создаем файл
+    fallocate -l $SWAP_SIZE $SWAP_FILE || dd if=/dev/zero of=$SWAP_FILE bs=1M count=1024
+    
+    # Выставляем права доступа (только root)
+    chmod 600 $SWAP_FILE
+    
+    # Форматируем как swap
+    mkswap $SWAP_FILE
+    
+    # Включаем swap
+    swapon $SWAP_FILE
+    
+    # Добавляем в fstab для автозагрузки
+    if ! grep -q "$SWAP_FILE" /etc/fstab; then
+        echo "$SWAP_FILE none swap sw 0 0" | tee -a /etc/fstab
+        print_msg "Swap добавлен в автозагрузку (/etc/fstab)"
+    fi
+    
+    print_msg "Swap файл успешно создан и активирован!"
+fi
+
+# Показываем текущий swap
+free -h | grep Swap
 
 # ============================================
 # РАЗДЕЛ 2: СИСТЕМНАЯ ОПТИМИЗАЦИЯ
@@ -153,8 +192,12 @@ net.ipv4.ip_forward=1
 net.ipv6.conf.all.forwarding=1
 net.ipv4.conf.all.forwarding=1
 
-# Оптимизация памяти
-vm.swappiness=10
+# --- ОПТИМИЗАЦИЯ ПАМЯТИ И SWAP (ДЛЯ 1GB RAM) ---
+# swappiness=30: Система будет использовать swap "охотнее", 
+# чем при стандартном 10 для серверов, чтобы освободить RAM для панели.
+# vfs_cache_pressure=50: Дольше держим кэш файловой системы в RAM.
+vm.swappiness=30
+vm.vfs_cache_pressure=50
 vm.dirty_ratio=15
 vm.dirty_background_ratio=5
 
@@ -437,12 +480,13 @@ cat > /root/3xui-installation-report.txt << EOF
 ──────────────────────────
 ✓ 3X-UI (версия $VERSION)
 ✓ Xray Core
+✓ Swap файл (1GB)
 
 СИСТЕМНЫЕ ОПТИМИЗАЦИИ:
 ──────────────────────────
 ✓ BBR Congestion Control
 ✓ TCP настройки оптимизированы
-✓ Лимиты открытых файлов увеличены
+✓ Swap настроен на активное использование (swappiness=30)
 
 БЕЗОПАСНОСТЬ:
 ──────────────────────────
